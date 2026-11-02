@@ -6451,60 +6451,187 @@ end subroutine hystpdf_2M
 
 
 
-! Diagnostic environmental ice supersaturation and cold persistence proxy.
-! MODE=0: grid-mean binary threshold; MODE=1: double-Gaussian PDF.
-! ISSRCLR is qsi<qt<qsw, not an explicit cirrus exclusion mask.
-! CONTRAIL is a cold-air screening proxy, NOT Schmidt-Appleman formation.
-subroutine Contrail_Potential(MODE,PDFSHAPE,PL,QV,QLLS,QILS,TE,CLCN, &
-    WHL,WQT,HL2,QT2,W3,W2bar,QT3,HL3,PDF_A,RHI_MEAN,ISSR,ISSRCLR,CONTRAIL)
-  implicit none
-  integer, intent(in) :: MODE,PDFSHAPE
-  real, intent(in) :: PL,QV,QLLS,QILS,TE,CLCN,WHL,WQT,HL2,QT2,W3,W2bar,QT3,HL3,PDF_A
-  real, intent(out) :: RHI_MEAN,ISSR,ISSRCLR,CONTRAIL
-  real :: qi,ql,qref,dqs,env,qt,a,exner,dqi,pi,pl
-  real :: beta,rwqt,rwhl,rhlqt,t1,t2,st1,st2,q1,q2,sq1,sq2,w1,w2,sw1,sw2
-  ISSR=0.0;ISSRCLR=0.0;CONTRAIL=0.0;RHI_MEAN=0.0
-  if(PL<=0.0.or.TE<=100.0) return
-  qi=GEOS_QsatICE(TE,PL*100.0)
-  if(qi<=0.0) return
-  RHI_MEAN=max(0.0,QV)/qi
-  env=max(0.0,1.0-min(1.0,max(0.0,CLCN)))
-  if(env<=1.e-8) return
-  dqs=GEOS_DQSAT(TE,PL,QSAT=qref)
-  ql=qref
-  if(MODE==0.or.PDFSHAPE/=6) then
-    if(RHI_MEAN>1.0) ISSR=env
-    if(RHI_MEAN>1.0.and.QV<ql) ISSRCLR=env
-  else
-    qt=(QV-CLCN*qref+QLLS+QILS)/env
-    call precalc_dblgss(PDF_A,WQT,WHL,TE,HL2,HL3,QT2,QT3, &
-       W2bar,W3,beta,rwqt,rwhl,rhlqt,t1,t2,st1,st2, &
-       q1,q2,sq1,sq2,w1,w2,sw1,sw2)
-    a=max(0.0,min(1.0,PDF_A))
-    exner=(PL/1000.0)**MAPL_KAPPA
-    dqi=(GEOS_QsatICE(TE+0.1,PL*100.0)-GEOS_QsatICE(TE-0.1,PL*100.0))/0.2
-    pi=(1.0-a)*tail(qt+q1,sq1,exner*t1,exner*st1,qi,dqi,rhlqt)+ &
-              a*tail(qt+q2,sq2,exner*t2,exner*st2,qi,dqi,rhlqt)
-    pl=(1.0-a)*tail(qt+q1,sq1,exner*t1,exner*st1,ql,dqs,rhlqt)+ &
-              a*tail(qt+q2,sq2,exner*t2,exner*st2,ql,dqs,rhlqt)
-    ISSR=env*max(0.0,min(1.0,pi))
-    ISSRCLR=env*max(0.0,min(1.0,pi-pl))
-  end if
-  if(TE<233.15) CONTRAIL=ISSRCLR
+
+!==============================================================================
+! Diagnose ice supersaturation and potential persistent-contrail conditions.
+!
+! This is a READ-ONLY diagnostic: no change to vapor, cloud ice, or temperature.
+!
+! MODE = 0 : use grid-mean relative humidity (binary ISSR test).
+! MODE = 1 : integrate the subgrid double-Gaussian PDF when PDFSHAPE = 6.
+!            Otherwise, fall back to MODE = 0.
+!
+! Outputs (all fractions are relative to the FULL grid-cell volume):
+!   RHI_MEAN : grid-mean QV / QSAT_ICE. Always calculated in either mode.
+!   ISSR     : estimated ice-supersaturated environmental fraction.
+!   ISSRCLR  : estimated fraction between ice and liquid saturation.
+!              This is only a clear-sky PROXY: cirrus can occur in this range.
+!   CONTRAIL : ISSRCLR below 233.15 K. This is a cold persistence SCREEN,
+!              NOT a Schmidt-Appleman contrail-formation calculation.
+!
+! Important limitations:
+!  * Convective cloud fraction CLCN is excluded using the same environmental
+!    vapor convention as hystpdf_2M / Pfreezing.
+!  * The subgrid PDF describes TOTAL water (vapor + resolved condensate).
+!    The exceedance calculation therefore approximates unsaturated air;
+!    it does not explicitly reconstruct vapor inside cloudy subgrid parcels.
+!  * Temperature variations and their correlation with total water are
+!    represented with a linearized saturation threshold. The liquid-water
+!    static-energy perturbations are approximately converted using Exner.
+!  * The PDF and the 233.15 K screening threshold have not yet been validated
+!    for actual contrail formation/persistence.
+!
+! Units: PL [hPa], TE [K], QV/QLLS/QILS [kg kg-1], outputs dimensionless.
+!==============================================================================
+subroutine Contrail_Potential( MODE, PDFSHAPE, PL, QV, QLLS, QILS, TE, CLCN, &
+                              WHL, WQT, HL2, QT2, W3, W2bar, QT3, HL3, PDF_A, &
+                              RHI_MEAN, ISSR, ISSRCLR, CONTRAIL )
+
+   implicit none
+
+   ! Inputs from the GEOS thermodynamic state and turbulence PDF.
+   integer, intent(in) :: MODE, PDFSHAPE
+   real, intent(in) :: PL, QV, QLLS, QILS, TE, CLCN
+   real, intent(in) :: WHL, WQT, HL2, QT2, W3, W2bar, QT3, HL3, PDF_A
+
+   ! Diagnosed relative humidity and grid-cell fractions.
+   real, intent(out) :: RHI_MEAN, ISSR, ISSRCLR, CONTRAIL
+
+   ! Saturation and environmental thermodynamic state.
+   real :: qsat_ice, qsat_liq, qsat_ref, dqsat_liq
+   real :: env_frac, qt_env, exner, dqsat_ice
+
+   ! Parameters returned by the existing double-Gaussian reconstruction.
+   real :: beta, rwqt, rwhl, rhlqt
+   real :: t1, t2, sigt1, sigt2
+   real :: q1, q2, sigmaqt1, sigmaqt2
+   real :: w1, w2, sigw1, sigw2
+
+   ! Mixture weight and saturation-tail probabilities.
+   real :: weight2, prob_ice, prob_liq
+   real, parameter :: T_CONTRAIL_SCREEN = 233.15
+
+   ! Initialize outputs, including cases without an environmental fraction.
+   RHI_MEAN = 0.0
+   ISSR     = 0.0
+   ISSRCLR  = 0.0
+   CONTRAIL = 0.0
+
+   if (PL <= 0.0 .or. TE <= 100.0) return
+
+   ! Always provide the conventional grid-mean relative humidity over ice.
+   ! GEOS_QsatICE expects pressure in Pa, while PL is supplied in hPa.
+   qsat_ice = GEOS_QsatICE(TE, PL*100.0)
+   if (qsat_ice <= 0.0) return
+   RHI_MEAN = max(0.0, QV)/qsat_ice
+
+   ! Remove the parameterized convective cloud portion of the grid cell.
+   env_frac = max(0.0, 1.0 - min(1.0, max(0.0, CLCN)))
+   if (env_frac <= 1.e-8) return
+
+   ! Use the same reference saturation as hystpdf_2M. GEOS_DQSAT takes
+   ! pressure in hPa and returns the saturation derivative with respect to T.
+   dqsat_liq = GEOS_DQSAT(TE, PL, QSAT=qsat_ref)
+   qsat_liq = qsat_ref
+
+   if (MODE == 0 .or. PDFSHAPE /= 6) then
+
+      ! ---------------------------------------------------------------
+      ! Grid-mean option: a binary test for the nonconvective fraction.
+      ! The water-saturation upper bound is a clear-air proxy only.
+      ! ---------------------------------------------------------------
+      if (RHI_MEAN > 1.0) ISSR = env_frac
+
+      if (RHI_MEAN > 1.0 .and. QV < qsat_liq) then
+         ISSRCLR = env_frac
+      end if
+
+   else
+
+      ! ---------------------------------------------------------------
+      ! Subgrid option: reconstruct the two Gaussian PDF components.
+      ! Environmental QT includes large-scale liquid and ice condensate.
+      ! The parameterized convective fraction is assumed to contain
+      ! qsat_ref vapor, as in the parent cloud PDF.
+      ! ---------------------------------------------------------------
+      qt_env = (QV - CLCN*qsat_ref + QLLS + QILS)/env_frac
+
+      call precalc_dblgss( PDF_A, WQT, WHL, TE, HL2, HL3, QT2, QT3, &
+                           W2bar, W3, beta, rwqt, rwhl, rhlqt, &
+                           t1, t2, sigt1, sigt2, &
+                           q1, q2, sigmaqt1, sigmaqt2, &
+                           w1, w2, sigw1, sigw2 )
+
+      ! PDF_A is the weight of the second Gaussian.
+      weight2 = min(1.0, max(0.0, PDF_A))
+      exner = (PL/1000.0)**MAPL_KAPPA
+
+      ! Finite-difference ice saturation derivative, used to linearize
+      ! the ice-saturation boundary around the grid-mean temperature.
+      dqsat_ice = (GEOS_QsatICE(TE+0.1, PL*100.0) - &
+                   GEOS_QsatICE(TE-0.1, PL*100.0))/0.2
+
+      ! Probability that environmental total water exceeds ice saturation.
+      ! Each Gaussian contribution includes its temperature perturbation,
+      ! variance, and temperature-total-water correlation.
+      prob_ice = (1.0-weight2)*gaussian_tail( &
+                      qt_env+q1, sigmaqt1, exner*t1, exner*sigt1, &
+                      qsat_ice, dqsat_ice, rhlqt) &
+               + weight2*gaussian_tail( &
+                      qt_env+q2, sigmaqt2, exner*t2, exner*sigt2, &
+                      qsat_ice, dqsat_ice, rhlqt)
+
+      ! The analogous liquid saturation exceedance is subtracted to
+      ! approximate the fraction between ice and liquid saturation.
+      prob_liq = (1.0-weight2)*gaussian_tail( &
+                      qt_env+q1, sigmaqt1, exner*t1, exner*sigt1, &
+                      qsat_liq, dqsat_liq, rhlqt) &
+               + weight2*gaussian_tail( &
+                      qt_env+q2, sigmaqt2, exner*t2, exner*sigt2, &
+                      qsat_liq, dqsat_liq, rhlqt)
+
+      ! Convert conditional environmental probabilities to full-cell
+      ! fractions and protect against negative fractions/roundoff.
+      ISSR    = env_frac*max(0.0, min(1.0, prob_ice))
+      ISSRCLR = env_frac*max(0.0, min(1.0, prob_ice-prob_liq))
+
+   end if
+
+   ! Preliminary persistence screen only; a full SAC implementation
+   ! must additionally account for aircraft/engine exhaust properties.
+   if (TE < T_CONTRAIL_SCREEN) CONTRAIL = ISSRCLR
+
 contains
-  real function tail(qmean,sq,dt,st,qs,dq,rho) result(prob)
-    real,intent(in)::qmean,sq,dt,st,qs,dq,rho
-    real::width,threshold,r
-    r=max(-0.999,min(0.999,rho))
-    width=sqrt(max(0.0,sq**2+(dq*st)**2-2.0*r*sq*dq*st))
-    threshold=qs+dq*dt
-    if(width<=1.e-12) then
-      prob=0.0
-      if(qmean>threshold) prob=1.0
-    else
-      prob=0.5*erfc((threshold-qmean)/(1.41421356237*width))
-    end if
-  end function tail
+
+   ! Return P(QT > QSAT(T)) for one correlated Gaussian component.
+   !
+   ! The linearized saturation deficit is (QT - QSAT). Its variance
+   ! includes the QT variance, temperature variance, and covariance.
+   ! TPERT and SIGT are perturbations/widths in approximate K units.
+   real function gaussian_tail(qmean, sigma_q, tpert, sigma_t, &
+                               qsat, dqsat_dt, corr_qt) result(prob)
+
+      real, intent(in) :: qmean, sigma_q, tpert, sigma_t
+      real, intent(in) :: qsat, dqsat_dt, corr_qt
+      real :: width, threshold, corr
+      real, parameter :: SQRT_TWO = 1.41421356237
+
+      corr = max(-0.999, min(0.999, corr_qt))
+      width = sqrt(max(0.0, sigma_q**2 + (dqsat_dt*sigma_t)**2 - &
+                           2.0*corr*sigma_q*dqsat_dt*sigma_t))
+      threshold = qsat + dqsat_dt*tpert
+
+      ! Explicit deterministic limit avoids division by zero when the
+      ! Gaussian variance is negligible.
+      if (width <= 1.e-12) then
+         prob = 0.0
+         if (qmean > threshold) prob = 1.0
+      else
+         prob = 0.5*erfc((threshold-qmean)/(SQRT_TWO*width))
+      end if
+
+   end function gaussian_tail
+
 end subroutine Contrail_Potential
 
 subroutine Pfreezing( &

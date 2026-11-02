@@ -279,6 +279,8 @@ module GEOSmoist_Process_Library
   real :: GF2M_C1D_SCALE     = 1.0
   real :: GF2M_TOP_DET_SCALE = 1.0
   logical :: GF2M_DET_LEVEL_AVERAGE = .TRUE.
+  logical :: GF2M_USE_C1D_DETRAIN = .FALSE. ! Use prescribed condensate shedding only for GF2M.
+  logical :: GF2M_DET_CONSERVATION_DIAG = .FALSE. ! Report discrepancies in detrainment totals.
   
   real    :: GF2M_HOM_NEW_ICE_DIAM = 40.0e-6
   logical :: GF2M_ACTIVATE_ABOVE_CLOUD_BASE = .false.

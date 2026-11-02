@@ -341,6 +341,7 @@ module GEOSmoist_Process_Library
   public :: smooth_cloud_binary
   public :: pdf_alpha
   public :: pfreezing
+   public :: Contrail_Potential
   public :: get_fac_eis
   public :: neg_adj_external
   public :: compute_sgs_vvel
@@ -6448,6 +6449,63 @@ end subroutine hystpdf_2M
 
    end subroutine WBF_Partition
 
+
+
+! Diagnostic environmental ice supersaturation and cold persistence proxy.
+! MODE=0: grid-mean binary threshold; MODE=1: double-Gaussian PDF.
+! ISSRCLR is qsi<qt<qsw, not an explicit cirrus exclusion mask.
+! CONTRAIL is a cold-air screening proxy, NOT Schmidt-Appleman formation.
+subroutine Contrail_Potential(MODE,PDFSHAPE,PL,QV,QLLS,QILS,TE,CLCN, &
+    WHL,WQT,HL2,QT2,W3,W2bar,QT3,HL3,PDF_A,RHI_MEAN,ISSR,ISSRCLR,CONTRAIL)
+  implicit none
+  integer, intent(in) :: MODE,PDFSHAPE
+  real, intent(in) :: PL,QV,QLLS,QILS,TE,CLCN,WHL,WQT,HL2,QT2,W3,W2bar,QT3,HL3,PDF_A
+  real, intent(out) :: RHI_MEAN,ISSR,ISSRCLR,CONTRAIL
+  real :: qi,ql,qref,dqs,env,qt,a,exner,dqi,pi,pl
+  real :: beta,rwqt,rwhl,rhlqt,t1,t2,st1,st2,q1,q2,sq1,sq2,w1,w2,sw1,sw2
+  ISSR=0.0;ISSRCLR=0.0;CONTRAIL=0.0;RHI_MEAN=0.0
+  if(PL<=0.0.or.TE<=100.0) return
+  qi=GEOS_QsatICE(TE,PL*100.0)
+  if(qi<=0.0) return
+  RHI_MEAN=max(0.0,QV)/qi
+  env=max(0.0,1.0-min(1.0,max(0.0,CLCN)))
+  if(env<=1.e-8) return
+  dqs=GEOS_DQSAT(TE,PL,QSAT=qref)
+  ql=qref
+  if(MODE==0.or.PDFSHAPE/=6) then
+    if(RHI_MEAN>1.0) ISSR=env
+    if(RHI_MEAN>1.0.and.QV<ql) ISSRCLR=env
+  else
+    qt=(QV-CLCN*qref+QLLS+QILS)/env
+    call precalc_dblgss(PDF_A,WQT,WHL,TE,HL2,HL3,QT2,QT3, &
+       W2bar,W3,beta,rwqt,rwhl,rhlqt,t1,t2,st1,st2, &
+       q1,q2,sq1,sq2,w1,w2,sw1,sw2)
+    a=max(0.0,min(1.0,PDF_A))
+    exner=(PL/1000.0)**MAPL_KAPPA
+    dqi=(GEOS_QsatICE(TE+0.1,PL*100.0)-GEOS_QsatICE(TE-0.1,PL*100.0))/0.2
+    pi=(1.0-a)*tail(qt+q1,sq1,exner*t1,exner*st1,qi,dqi,rhlqt)+ &
+              a*tail(qt+q2,sq2,exner*t2,exner*st2,qi,dqi,rhlqt)
+    pl=(1.0-a)*tail(qt+q1,sq1,exner*t1,exner*st1,ql,dqs,rhlqt)+ &
+              a*tail(qt+q2,sq2,exner*t2,exner*st2,ql,dqs,rhlqt)
+    ISSR=env*max(0.0,min(1.0,pi))
+    ISSRCLR=env*max(0.0,min(1.0,pi-pl))
+  end if
+  if(TE<233.15) CONTRAIL=ISSRCLR
+contains
+  real function tail(qmean,sq,dt,st,qs,dq,rho) result(prob)
+    real,intent(in)::qmean,sq,dt,st,qs,dq,rho
+    real::width,threshold,r
+    r=max(-0.999,min(0.999,rho))
+    width=sqrt(max(0.0,sq**2+(dq*st)**2-2.0*r*sq*dq*st))
+    threshold=qs+dq*dt
+    if(width<=1.e-12) then
+      prob=0.0
+      if(qmean>threshold) prob=1.0
+    else
+      prob=0.5*erfc((threshold-qmean)/(1.41421356237*width))
+    end if
+  end function tail
+end subroutine Contrail_Potential
 
 subroutine Pfreezing( &
       ALPHA, PDFSHAPE, PL, QV, QLLS, QILS, TE, CLCN, &

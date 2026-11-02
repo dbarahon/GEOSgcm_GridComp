@@ -2965,7 +2965,8 @@ CONTAINS
            else
               ! GF2M uses its diagnosed cloud phase for latent heating.
               IF (USE_CUP_2M_MOISTURE) THEN
-                 DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))
+                 DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) &
+                      * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))
               ELSE
               DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))
               ENDIF
@@ -2975,7 +2976,8 @@ CONTAINS
 
            ! GF2M uses its diagnosed cloud phase for latent heating.
            IF (USE_CUP_2M_MOISTURE) THEN
-              XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))) * MBDT(i) + TN(I,K)
+              XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) &
+                   * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))) * MBDT(i) + TN(I,K)
            ELSE
            XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))) * MBDT(i) + TN(I,K)
            ENDIF

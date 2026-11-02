@@ -1397,7 +1397,7 @@ CONTAINS
   REAL :: detdo1, detdo2, entdo, dp, subin, detdo, entup, detup, subdown, entdoj, entupk, detupk, totmas
   REAL :: tot_time_hr, beta, wmeanx, env_mf, env_mf_p, env_mf_m, dts, denom, denomU, umean, T_star
   REAL :: C_up, E_dn, G_rain, trash2, pgc, bl2dp, trash3, dsubh_aver, dellah_aver, x_add, cap_max_inc
-  REAL :: gf2m_det_mismatch_max, gf2m_split_residual_max
+  REAL :: gf2m_det_mismatch_max, gf2m_split_residual_max, gf2m_plume_mass_error_max
   REAL :: tlll, plll, rlll, tlcl, plcl, dzlcl, zlll
   REAL :: s1, s2, q1, q2, rzenv, factor, CWV, entr_threshold, resten_H, resten_Q, resten_T
   REAL :: w_eff, tau_0, tau_1, alp0, beta1, beta2, dp_p, dp_m, delt1, delt2, delt_Tvv, wkf, ckf, wkflcl, rcount
@@ -2116,8 +2116,7 @@ CONTAINS
   ! For the legacy moisture path, retained cloud phase is the original
   ! temperature-based GF partition: ice fraction = 1 - p_liq_ice.
   !
-  ! Retained-cloud thermodynamic phase is controlled separately from
-  ! mass authority by GF2M_PLIQ_EFF_OPTION below.
+  ! GF2M_PLIQ_EFF_OPTION selects the retained-cloud phase for thermodynamics.
   !
   ! Do not use pice_cloud_eff directly for get_melting_profile: melting needs
   ! the falling precipitation phase, whereas pice_2m is the retained cloud
@@ -2647,6 +2646,16 @@ CONTAINS
      ! GF2M uses the same operator for liquid, ice, and their numbers.
      gf2m_det_mismatch_max = 0.0
      gf2m_split_residual_max = 0.0
+     gf2m_plume_mass_error_max = 0.0
+     IF (USE_CUP_2M_MOISTURE) THEN
+        DO i = its, itf
+           IF (ierr(i) /= 0) CYCLE
+           DO k = kts, ktop(i)
+              gf2m_plume_mass_error_max = max(gf2m_plume_mass_error_max, &
+                   abs(qrco(i,k) - qliq_up_2m(i,k) - qice_up_2m(i,k)))
+           ENDDO
+        ENDDO
+     ENDIF
      IF (USE_CUP_2M_MOISTURE) THEN
         CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
              up_massdetro, zuo, c1d, qliq_up_2m, dellaqliq_2m, &
@@ -2688,7 +2697,7 @@ CONTAINS
 ! BUG2025     dellah(i,k) = dellah(i,k) - xlf*melting(i,k)*g/dp
               ! GF2M uses its diagnosed cloud phase for latent heating.
               IF (USE_CUP_2M_MOISTURE) THEN
-              dellah(i,k) = dellah(i,k) + xlf * ((1. - p_liq_eff(i,k)) * 0.5 * (qrco(i,k+1) + qrco(i,k)) - melting(i,k)) * g / dp
+                 dellah(i,k) = dellah(i,k) + xlf * ((1. - p_liq_eff(i,k)) * 0.5 * (qrco(i,k+1) + qrco(i,k)) - melting(i,k)) * g / dp
               ELSE
               dellah(i,k) = dellah(i,k) + xlf * ((1. - p_liq_ice(i,k)) * 0.5 * (qrco(i,k+1) + qrco(i,k)) - melting(i,k)) * g / dp
               ENDIF
@@ -2956,7 +2965,7 @@ CONTAINS
            else
               ! GF2M uses its diagnosed cloud phase for latent heating.
               IF (USE_CUP_2M_MOISTURE) THEN
-              DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))
+                 DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))
               ELSE
               DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))
               ENDIF
@@ -2966,7 +2975,7 @@ CONTAINS
 
            ! GF2M uses its diagnosed cloud phase for latent heating.
            IF (USE_CUP_2M_MOISTURE) THEN
-           XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))) * MBDT(i) + TN(I,K)
+              XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))) * MBDT(i) + TN(I,K)
            ELSE
            XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))) * MBDT(i) + TN(I,K)
            ENDIF
@@ -3008,7 +3017,7 @@ CONTAINS
            endif
            ! GF2M uses its diagnosed cloud phase for latent heating.
            IF (USE_CUP_2M_MOISTURE) THEN
-           xhc(i,k) = xhc(i,k) + xlf * (1. - p_liq_eff(i,k)) * qrco(i,k)
+              xhc(i,k) = xhc(i,k) + xlf * (1. - p_liq_eff(i,k)) * qrco(i,k)
            ELSE
            xhc(i,k) = xhc(i,k) + xlf * (1. - p_liq_ice(i,k)) * qrco(i,k)
            ENDIF
@@ -3072,9 +3081,11 @@ CONTAINS
 
   ! Report deviations from the legacy total without changing GF2M mass.
   IF (USE_CUP_2M_MOISTURE .AND. GF2M_DET_CONSERVATION_DIAG) THEN
-     IF (gf2m_det_mismatch_max > 1.e-10 .OR. gf2m_split_residual_max > 1.e-10) THEN
+     IF (gf2m_det_mismatch_max > 1.e-10 .OR. gf2m_split_residual_max > 1.e-10 .OR. &
+         gf2m_plume_mass_error_max > 1.e-10) THEN
         WRITE(6,*) 'GF2M_DETRAIN: legacy_difference=', gf2m_det_mismatch_max, &
-                   ' phase_sum_residual=', gf2m_split_residual_max
+                   ' phase_sum_residual=', gf2m_split_residual_max, &
+                   ' plume_mass_residual=', gf2m_plume_mass_error_max
      ENDIF
   ENDIF
 

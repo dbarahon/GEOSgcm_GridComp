@@ -3386,6 +3386,30 @@ contains
          VLOCATION = MAPL_VLocationCenter,              RC=STATUS  )
     VERIFY_(STATUS)
 
+    call MAPL_AddExportSpec(GC, &
+         SHORT_NAME='RHI_MEAN', LONG_NAME='grid_mean_relative_humidity_over_ice', &
+         UNITS='1', DIMS=MAPL_DimsHorzVert, &
+         VLOCATION=MAPL_VLocationCenter, RC=STATUS )
+    VERIFY_(STATUS)
+
+    call MAPL_AddExportSpec(GC, &
+         SHORT_NAME='ISSR', LONG_NAME='ice_supersaturated_environment_fraction', &
+         UNITS='1', DIMS=MAPL_DimsHorzVert, &
+         VLOCATION=MAPL_VLocationCenter, RC=STATUS )
+    VERIFY_(STATUS)
+
+    call MAPL_AddExportSpec(GC, &
+         SHORT_NAME='ISSRCLR', LONG_NAME='ice_supersaturated_clear_air_proxy_fraction', &
+         UNITS='1', DIMS=MAPL_DimsHorzVert, &
+         VLOCATION=MAPL_VLocationCenter, RC=STATUS )
+    VERIFY_(STATUS)
+
+    call MAPL_AddExportSpec(GC, &
+         SHORT_NAME='CONTRAIL', LONG_NAME='cold_persistent_contrail_screen_not_SAC', &
+         UNITS='1', DIMS=MAPL_DimsHorzVert, &
+         VLOCATION=MAPL_VLocationCenter, RC=STATUS )
+    VERIFY_(STATUS)
+
     call MAPL_AddExportSpec(GC,                               &
          SHORT_NAME='PFRZ',                                 &
          LONG_NAME ='Probability_of_freezing_of_aerosol_part',          &

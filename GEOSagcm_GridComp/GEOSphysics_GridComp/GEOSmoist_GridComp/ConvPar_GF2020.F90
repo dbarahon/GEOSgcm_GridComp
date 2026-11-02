@@ -1397,6 +1397,7 @@ CONTAINS
   REAL :: detdo1, detdo2, entdo, dp, subin, detdo, entup, detup, subdown, entdoj, entupk, detupk, totmas
   REAL :: tot_time_hr, beta, wmeanx, env_mf, env_mf_p, env_mf_m, dts, denom, denomU, umean, T_star
   REAL :: C_up, E_dn, G_rain, trash2, pgc, bl2dp, trash3, dsubh_aver, dellah_aver, x_add, cap_max_inc
+  REAL :: gf2m_det_mismatch_max, gf2m_split_residual_max
   REAL :: tlll, plll, rlll, tlcl, plcl, dzlcl, zlll
   REAL :: s1, s2, q1, q2, rzenv, factor, CWV, entr_threshold, resten_H, resten_Q, resten_T
   REAL :: w_eff, tau_0, tau_1, alp0, beta1, beta2, dp_p, dp_m, delt1, delt2, delt_Tvv, wkf, ckf, wkflcl, rcount
@@ -2643,6 +2644,24 @@ CONTAINS
      dellu = 0.; dellv = 0.; dellah = 0.; dellat = 0.; dellaq = 0.; dellaqc = 0.; dellabuoy = 0.
      subten_H = 0.; subten_Q = 0.; subten_T = 0.
 
+     ! GF2M uses the same operator for liquid, ice, and their numbers.
+     gf2m_det_mismatch_max = 0.0
+     gf2m_split_residual_max = 0.0
+     IF (USE_CUP_2M_MOISTURE) THEN
+        CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
+             up_massdetro, zuo, c1d, qliq_up_2m, dellaqliq_2m, &
+             itf, ktf, its, ite, kts, kte, GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
+        CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
+             up_massdetro, zuo, c1d, qice_up_2m, dellaqice_2m, &
+             itf, ktf, its, ite, kts, kte, GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
+        CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
+             up_massdetro, zuo, c1d, nliq_up_2m, dellanliq_2m, &
+             itf, ktf, its, ite, kts, kte, GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
+        CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
+             up_massdetro, zuo, c1d, nice_up_2m, dellanice_2m, &
+             itf, ktf, its, ite, kts, kte, GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
+     ENDIF
+
      !--------------------------------------------------------------------------
      ! 7.1 Vertical Discretization Feedback Forms
      !--------------------------------------------------------------------------
@@ -2667,7 +2686,12 @@ CONTAINS
                             +(zdo(i,k+1) * (hcdo(i,k+1) - heo_cup(i,k+1)) - zdo(i,k) * (hcdo(i,k) - heo_cup(i,k))) * g / dp * edto(i)
             !---meltglac-------------------------------------------------
 ! BUG2025     dellah(i,k) = dellah(i,k) - xlf*melting(i,k)*g/dp
+              ! GF2M uses its diagnosed cloud phase for latent heating.
+              IF (USE_CUP_2M_MOISTURE) THEN
+              dellah(i,k) = dellah(i,k) + xlf * ((1. - p_liq_eff(i,k)) * 0.5 * (qrco(i,k+1) + qrco(i,k)) - melting(i,k)) * g / dp
+              ELSE
               dellah(i,k) = dellah(i,k) + xlf * ((1. - p_liq_ice(i,k)) * 0.5 * (qrco(i,k+1) + qrco(i,k)) - melting(i,k)) * g / dp
+              ENDIF
 ! BUG2025 this is a known bug where latent heat of freezing for qrco included in hco already
 ! BUG2025 this bug remains for the legacy VERT_DISCR==0 configuration for consistency with old exps
 ! BUG2025 the bug is corrected below when running the recommended VERT_DISCR==1
@@ -2685,6 +2709,15 @@ CONTAINS
                  !    (This is always used at cloud top)
                  dellaqc(i,k) = detup * 0.5 * (qrco(i,k+1) + qrco(i,k)) * g / dp
               endif
+
+              ! The GF2M phase sum owns its total detrainment.
+              IF (USE_CUP_2M_MOISTURE) THEN
+                 gf2m_det_mismatch_max = max(gf2m_det_mismatch_max, &
+                      abs(dellaqc(i,k) - (dellaqliq_2m(i,k) + dellaqice_2m(i,k))))
+                 dellaqc(i,k) = dellaqliq_2m(i,k) + dellaqice_2m(i,k)
+                 gf2m_split_residual_max = max(gf2m_split_residual_max, &
+                      abs(dellaqc(i,k) - dellaqliq_2m(i,k) - dellaqice_2m(i,k)))
+              ENDIF
 
               G_rain =  0.5 * (pwo(i,k) + pwo(i,k+1)) * g / dp
               E_dn   = -0.5 * (pwdo(i,k) + pwdo(i,k+1)) * g / dp * edto(i)
@@ -2795,6 +2828,15 @@ CONTAINS
               endif
                        
               ! 2. Calculate budget terms
+              ! The GF2M phase sum owns its total detrainment.
+              IF (USE_CUP_2M_MOISTURE) THEN
+                 gf2m_det_mismatch_max = max(gf2m_det_mismatch_max, &
+                      abs(dellaqc(i,k) - (dellaqliq_2m(i,k) + dellaqice_2m(i,k))))
+                 dellaqc(i,k) = dellaqliq_2m(i,k) + dellaqice_2m(i,k)
+                 gf2m_split_residual_max = max(gf2m_split_residual_max, &
+                      abs(dellaqc(i,k) - dellaqliq_2m(i,k) - dellaqice_2m(i,k)))
+              ENDIF
+
               G_rain =  0.5 * (pwo(i,k) + pwo(i,k+1)) * g / dp
               E_dn   = -0.5 * (pwdo(i,k) + pwdo(i,k+1)) * g / dp * edto(i)
               C_up   = dellaqc(i,k) + (zuo(i,k+1) * qrco(i,k+1) - zuo(i,k) * qrco(i,k)) * g / dp + G_rain
@@ -2893,7 +2935,7 @@ CONTAINS
            do k = kts, ktop(i)
               DELLAH(i,k)  = tend2d(k,1)
               DELLAQ(i,k)  = tend2d(k,2)
-              DELLAQC(i,k) = tend2d(k,3)
+              IF (.NOT. USE_CUP_2M_MOISTURE) DELLAQC(i,k) = tend2d(k,3)
               DELLU(i,k)   = tend2d(k,4)
               DELLV(i,k)   = tend2d(k,5)
            enddo
@@ -2912,12 +2954,22 @@ CONTAINS
            if(COUPL_MPHYSICS) then
               DELLAT(I,K) = (1./cp) * (DELLAH(I,K) - xlv * DELLAQ(I,K))
            else
+              ! GF2M uses its diagnosed cloud phase for latent heating.
+              IF (USE_CUP_2M_MOISTURE) THEN
+              DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))
+              ELSE
               DELLAT(I,K)  = (1./cp) * (DELLAH(I,K) - xlv * (DELLAQ(I,K) + DELLAQC(i,k)) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))
+              ENDIF
               DELLAQ(I,K)  = DELLAQ(I,K) + DELLAQC(I,K)
               DELLAQC(I,K) = 0.0
            endif
 
+           ! GF2M uses its diagnosed cloud phase for latent heating.
+           IF (USE_CUP_2M_MOISTURE) THEN
+           XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_eff(i,k))))) * MBDT(i) + TN(I,K)
+           ELSE
            XT(I,K) = ((1./cp) * DELLAH(i,k) - (xlv/cp) * (DELLAQ(i,k) + DELLAQC(i,k) * (1. + (xlf/xlv) * (1. - p_liq_ice(i,k))))) * MBDT(i) + TN(I,K)
+           ENDIF
            subten_T(i,k) = (1./cp) * (subten_H(i,k) - xlv * subten_Q(i,k))
         enddo
      enddo
@@ -2954,7 +3006,12 @@ CONTAINS
              !    xhc(i,k)= xhc(i,k) + x_add*up_massentro(i,k-1)/denom
              !endif
            endif
+           ! GF2M uses its diagnosed cloud phase for latent heating.
+           IF (USE_CUP_2M_MOISTURE) THEN
+           xhc(i,k) = xhc(i,k) + xlf * (1. - p_liq_eff(i,k)) * qrco(i,k)
+           ELSE
            xhc(i,k) = xhc(i,k) + xlf * (1. - p_liq_ice(i,k)) * qrco(i,k)
+           ENDIF
         enddo
 
         do k = ktop(i) + 2, ktf
@@ -3013,48 +3070,12 @@ CONTAINS
      enddo
   ENDDO
 
-  !--------------------------------------------------------------------------
-  ! 7.2 2M split and number tendencies.
-  !
-  ! Single retained architecture after removing the mass-authority switch:
-  !   * parent total condensate tendency, dellaqc, remains authoritative;
-  !   * qliq/qice/nliq/nice tendencies use the parent detrainment operator
-  !     with Process_Library scaling factors;
-  !   * qliq/qice mass tendencies are rescaled to the parent total.
-  !
-  ! Process_Library controls:
-  !   GF2M_DET_SCALE          explicit detrainment below cloud top
-  !   GF2M_C1D_SCALE          c1d exchange/detrainment branch, inactive when C1=0
-  !   GF2M_TOP_DET_SCALE      explicit cloud-top detrainment
-  !   GF2M_DET_LEVEL_AVERAGE  .true.  : use 0.5*(phi(k)+phi(k+1)) 
-  !                            .false. : use the local GF2M value phi(k)
-  !--------------------------------------------------------------------------
-  IF (USE_CUP_2M_MOISTURE) THEN
-
-     ! Parent total dellaqc is left untouched: it was computed above from qrc
-     ! using the parent GF scalar detrainment operator.  Only the split/number
-     ! tendencies are computed here.
-     CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
-                                        up_massdetro, zuo, c1d, qliq_up_2m, dellaqliq_2m, &
-                                        itf, ktf, its, ite, kts, kte, &
-                                        GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
-     CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
-                                        up_massdetro, zuo, c1d, qice_up_2m, dellaqice_2m, &
-                                        itf, ktf, its, ite, kts, kte, &
-                                        GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
-     CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
-                                        up_massdetro, zuo, c1d, nliq_up_2m, dellanliq_2m, &
-                                        itf, ktf, its, ite, kts, kte, &
-                                        GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
-     CALL apply_cup_up_detrain_operator(cumulus, ierr, ktop, po_cup, zo_cup, &
-                                        up_massdetro, zuo, c1d, nice_up_2m, dellanice_2m, &
-                                        itf, ktf, its, ite, kts, kte, &
-                                        GF2M_DET_SCALE, GF2M_C1D_SCALE, GF2M_TOP_DET_SCALE)
-
-     CALL enforce_2m_split_tendency_conservation(ierr, ktop, dellaqc, &
-                                                  dellaqliq_2m, dellaqice_2m, &
-                                                  itf, ktf, its, ite, kts, kte)
-
+  ! Report deviations from the legacy total without changing GF2M mass.
+  IF (USE_CUP_2M_MOISTURE .AND. GF2M_DET_CONSERVATION_DIAG) THEN
+     IF (gf2m_det_mismatch_max > 1.e-10 .OR. gf2m_split_residual_max > 1.e-10) THEN
+        WRITE(6,*) 'GF2M_DETRAIN: legacy_difference=', gf2m_det_mismatch_max, &
+                   ' phase_sum_residual=', gf2m_split_residual_max
+     ENDIF
   ENDIF
 
   !=============================================================================
@@ -7342,87 +7363,30 @@ loop0:  do k= kbcon(i),ktop(i)
 
      phi_tend(:,:) = 0.0
 
-     IF(VERT_DISCR == 0) THEN
-        DO i = its, itf
-           IF(ierr(i) /= 0) CYCLE
-           DO k = kts, ktop(i)
-              dp = 100.0 * (po_cup(i,k) - po_cup(i,k+1))
-              IF(dp <= 0.0) CYCLE
-
-              detup = up_massdetro(i,k)
-              IF(GF2M_DET_LEVEL_AVERAGE) THEN
-                 phi_det = 0.5 * (phi_up(i,k+1) + phi_up(i,k))
-              ELSE
-                 phi_det = phi_up(i,k)
-              ENDIF
-              det_term = detup * phi_det * g / dp
-              IF((c1d(i,k) == 0.0) .OR. trim(cumulus) == 'mid' .OR. trim(cumulus) == 'shallow') THEN
-                 IF(k == ktop(i)) THEN
-                    phi_tend(i,k) = top_det_scale * det_term
-                 ELSE
-                    phi_tend(i,k) = det_scale * det_term
-                 ENDIF
-              ELSE
-                 IF(k == ktop(i)) THEN
-                    phi_tend(i,k) = top_det_scale * det_term
-                 ELSE
-                    dz = zo_cup(i,k+1) - zo_cup(i,k)
-                    c1d_term = zuo(i,k) * c1d(i,k) * phi_up(i,k) * dz / dp * g
-                    phi_tend(i,k) = c1d_scale * c1d_term
-                 ENDIF
-              ENDIF
-           ENDDO
+     ! Select the same condensate transport rule for every plume.
+     DO i = its, itf
+        IF (ierr(i) /= 0) CYCLE
+        DO k = kts, ktop(i)
+           dp = 100.0 * (po_cup(i,k) - po_cup(i,k+1))
+           IF (dp <= 0.0) CYCLE
+           detup = up_massdetro(i,k)
+           IF (GF2M_DET_LEVEL_AVERAGE) THEN
+              phi_det = 0.5 * (phi_up(i,k+1) + phi_up(i,k))
+           ELSE
+              phi_det = phi_up(i,k)
+           ENDIF
+           det_term = detup * phi_det * g / dp
+           IF (k == ktop(i)) THEN
+              phi_tend(i,k) = top_det_scale * det_term
+           ELSEIF (GF2M_USE_C1D_DETRAIN .AND. c1d(i,k) > 0.0) THEN
+              dz = zo_cup(i,k+1) - zo_cup(i,k)
+              c1d_term = zuo(i,k) * c1d(i,k) * phi_up(i,k) * dz / dp * g
+              phi_tend(i,k) = c1d_scale * c1d_term
+           ELSE
+              phi_tend(i,k) = det_scale * det_term
+           ENDIF
         ENDDO
-
-     ELSEIF(VERT_DISCR == 1) THEN
-        DO i = its, itf
-           IF(ierr(i) /= 0) CYCLE
-           DO k = kts, ktop(i)
-              dp = 100.0 * (po_cup(i,k) - po_cup(i,k+1))
-              IF(dp <= 0.0) CYCLE
-
-              detup = up_massdetro(i,k)
-              IF(GF2M_DET_LEVEL_AVERAGE) THEN
-                 phi_det = 0.5 * (phi_up(i,k+1) + phi_up(i,k))
-              ELSE
-                 phi_det = phi_up(i,k)
-              ENDIF
-              det_term = detup * phi_det * g / dp
-              IF(trim(cumulus) == 'mid' .OR. trim(cumulus) == 'shallow') THEN
-                 IF(k == ktop(i)) THEN
-                    phi_tend(i,k) = top_det_scale * det_term
-                 ELSE
-                    phi_tend(i,k) = det_scale * det_term
-                 ENDIF
-              ELSEIF(trim(cumulus) == 'deep') THEN
-                 IF(c1d(i,k) == 0.0) THEN
-                    IF(k == ktop(i)) THEN
-                       phi_tend(i,k) = top_det_scale * det_term
-                    ELSE
-                       phi_tend(i,k) = det_scale * det_term
-                    ENDIF
-                 ELSEIF(c1d(i,k) > 0.0) THEN
-                    IF(k == ktop(i)) THEN
-                       phi_tend(i,k) = top_det_scale * det_term
-                    ELSE
-                       dz = zo_cup(i,k+1) - zo_cup(i,k)
-                       c1d_term = zuo(i,k) * c1d(i,k) * phi_up(i,k) * dz / dp * g
-                       phi_tend(i,k) = c1d_scale * c1d_term
-                    ENDIF
-                 ELSE
-                    IF(k == ktop(i)) THEN
-                       phi_tend(i,k) = top_det_scale * det_term
-                    ELSE
-                       dz = zo_cup(i,k+1) - zo_cup(i,k)
-                       c1d_term = zuo(i,k) * c1d(i,k) * phi_up(i,k) * dz / dp * g
-                       phi_tend(i,k) = (c1d_scale * c1d_term + det_scale * det_term) * 0.5
-                    ENDIF
-                 ENDIF
-              ENDIF
-           ENDDO
-        ENDDO
-     ENDIF
-
+     ENDDO
    END SUBROUTINE apply_cup_up_detrain_operator
 
 !------------------------------------------------------------------------------------

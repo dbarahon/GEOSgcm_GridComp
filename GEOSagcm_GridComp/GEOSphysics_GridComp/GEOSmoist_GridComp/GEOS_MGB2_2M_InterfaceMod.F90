@@ -88,7 +88,7 @@ module GEOS_MGB2_2M_InterfaceMod
            
 
 
-  INTEGER :: MGB2_WSUB_OPTION, ST_OPTION, RHC_OPTION
+  INTEGER :: MGB2_WSUB_OPTION, ST_OPTION, RHC_OPTION, CONTRAIL_PDF_OPTION
   
   public :: MGB2_2M_Setup, MGB2_2M_Initialize, MGB2_2M_Run
   public :: MGVERSION
@@ -362,6 +362,7 @@ subroutine MGB2_2M_Initialize (MAPL, RC)
     !====================large scale condensation tuning/options======
       
 
+    call MAPL_GetResource( MAPL, CONTRAIL_PDF_OPTION, 'CONTRAIL_PDF_OPTION:', DEFAULT=1, RC=STATUS); VERIFY_(STATUS)
     call MAPL_GetResource( MAPL, MGB2_PDFSHAPE   , 'PDFSHAPE:'        , DEFAULT= 6    , RC=STATUS); VERIFY_(STATUS)
     call MAPL_GetResource( MAPL, FAC_RI          , 'FAC_RI:'          , DEFAULT= 1.   , RC=STATUS); VERIFY_(STATUS)
     call MAPL_GetResource( MAPL, FAC_RL          , 'FAC_RL:'          , DEFAULT= 1.   , RC=STATUS); VERIFY_(STATUS)
@@ -625,6 +626,7 @@ subroutine MGB2_2M_Run  (GC, IMPORT, EXPORT, CLOCK, RC)
     real, pointer, dimension(:,:,:) :: PDF_A, PDFITERS
 
     real, pointer, dimension(:,:,:) :: RHCRIT, SIGMA_S
+     real, pointer, dimension(:,:,:) :: RHI_MEAN, ISSR, ISSRCLR, CONTRAIL
     real, pointer, dimension(:,:  ) :: DBZ_MAX, DBZ_1KM, DBZ_TOP, DBZ_M10C
 
     real, pointer, dimension(:,:,:) :: PTR3D
@@ -1042,7 +1044,12 @@ subroutine MGB2_2M_Run  (GC, IMPORT, EXPORT, CLOCK, RC)
     call MAPL_GetPointer(EXPORT, CLDREFFG,    'RG'          , ALLOC=.TRUE., __RC__)
     call MAPL_GetPointer(EXPORT, CDNC_NUC,    'CDNC_NUC'    , ALLOC=.TRUE., __RC__) 
     call MAPL_GetPointer(EXPORT, INC_NUC,     'INC_NUC'     , ALLOC=.TRUE., __RC__)
-    call MAPL_GetPointer(EXPORT, PFRZ,        'PFRZ'        , ALLOC=.TRUE., __RC__)
+    call MAPL_GetPointer(EXPORT, RHI_MEAN, 'RHI_MEAN', ALLOC=.TRUE., __RC__)
+     call MAPL_GetPointer(EXPORT, ISSR, 'ISSR', ALLOC=.TRUE., __RC__)
+     call MAPL_GetPointer(EXPORT, ISSRCLR, 'ISSRCLR', ALLOC=.TRUE., __RC__)
+     call MAPL_GetPointer(EXPORT, CONTRAIL, 'CONTRAIL', ALLOC=.TRUE., __RC__)
+     RHI_MEAN=0.0; ISSR=0.0; ISSRCLR=0.0; CONTRAIL=0.0
+     call MAPL_GetPointer(EXPORT, PFRZ,        'PFRZ'        , ALLOC=.TRUE., __RC__)
     call MAPL_GetPointer(EXPORT, LTS,         'LTS'         , ALLOC=.TRUE., __RC__)
     call MAPL_GetPointer(EXPORT, EIS,         'EIS'         , ALLOC=.TRUE., __RC__)
     call MAPL_GetPointer(EXPORT, SMAX_LIQ,       'SMAX_LIQ'    , ALLOC=.TRUE., __RC__)
@@ -1763,6 +1770,19 @@ subroutine MGB2_2M_Run  (GC, IMPORT, EXPORT, CLOCK, RC)
         call MAPL_TimerOff(MAPL,"---CLDMACRO")
         
         
+        ! Read-only post-macrophysics ISSR and cold contrail screening.
+        do I=1,IM
+          do J=1,JM
+            do K=1,LM
+              call Contrail_Potential(CONTRAIL_PDF_OPTION,MGB2_PDFSHAPE, &
+                PLmb(I,J,K),Q(I,J,K),QLLS(I,J,K),QILS(I,J,K),T(I,J,K), &
+                CLCN(I,J,K),WSL(I,J,K),WQT(I,J,K),SL2(I,J,K),QT2(I,J,K), &
+                W3(I,J,K),W2(I,J,K),QT3(I,J,K),SL3(I,J,K),PDF_A(I,J,K), &
+                RHI_MEAN(I,J,K),ISSR(I,J,K),ISSRCLR(I,J,K),CONTRAIL(I,J,K))
+            end do
+          end do
+        end do
+
         do I=1,IM
           do J=1,JM
            do K=1,LM
